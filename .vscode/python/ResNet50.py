@@ -12,7 +12,7 @@ from torchvision.datasets import ImageFolder
 from torchvision import models
 from torch import optim
 from torchsummary import summary
-from sklearn.metrics import recall_score, precision_score, f1_score
+from sklearn.metrics import recall_score, precision_score, f1_score, confusion_matrix, ConfusionMatrixDisplay
 
 import time
 
@@ -58,7 +58,6 @@ test_transformer = transforms.Compose([
 
 def split_Train_Val_Data(data_dir):
     dataset = ImageFolder(data_dir) 
-    # 建立 20 類的 list
     character = [[] for i in range(len(dataset.classes))]
     # print(character)
     
@@ -78,7 +77,6 @@ def split_Train_Val_Data(data_dir):
         # -------------------------------------------
         num_sample_train = int(len(data) * 0.8)
         num_sample_test = len(data) - num_sample_train
-        # print(str(i) + ': ' + str(len(data)) + ' | ' + str(num_sample_train) + ' | ' + str(num_sample_test))
         
         for x in data[:num_sample_train] : # 前 80% 資料存進 training list
             train_inputs.append(x)
@@ -100,17 +98,25 @@ lr = 1e-3                                        # Learning Rate
 epochs = 10                                      # epoch 次數
 
 data_dir = 'D:/資料集/root'                       # 資料夾名稱
+fig_dir = 'D:/實驗結果/'                          # 圖片儲存的資料夾名稱
 
 train_dataloader, test_dataloader = split_Train_Val_Data(data_dir)
-C = models.resnet50(pretrained=True).to(device)     # 使用內建的 model 
+C = models.resnet50(pretrained=True)
+num_features = C.fc.in_features
+C.fc = nn.Linear(num_features, 4)  # 將輸出調整為 4 個類別
+C = C.to(device)
 optimizer_C = optim.SGD(C.parameters(), lr = lr) # 選擇你想用的 optimizer
 summary(C, (3, 244, 244))                        # 利用 torchsummary 的 summary package 印出模型資訊，input size: (3 * 224 * 224)
-# Loss function
-criterion = nn.CrossEntropyLoss()                # 選擇想用的 loss function
+# 計算每個類別的權重
+class_counts = np.bincount([label for _, label in ImageFolder(data_dir).samples])
+class_weights = 1.0 / class_counts
+weights = torch.tensor(class_weights, dtype=torch.float).to(device)
+
+# Loss function with class weights
+criterion = nn.CrossEntropyLoss(weight=weights)  # 選擇想用的 loss function並加入 class weight
 
 loss_epoch_C = []
 train_acc, test_acc = [], []
-recall_epoch, precision_epoch, f1_epoch = [], [], []
 best_acc, best_auc = 0.0, 0.0
 
 if __name__ == '__main__':
@@ -122,9 +128,9 @@ if __name__ == '__main__':
         correct_test, total_test = 0, 0
         train_loss_C = 0.0
 
-        # 初始化 True Positive 和 True Negative 的計數器
-        true_positive, true_negative = 0, 0
-        false_positive, false_negative = 0, 0
+        # 初始化預測和真實標籤的列表
+        all_predictions = []
+        all_labels = []
 
         C.train() # 設定 train 或 eval
         print('epoch: ' + str(epoch + 1) + ' / ' + str(epochs))  
@@ -144,22 +150,9 @@ if __name__ == '__main__':
             _, predicted = torch.max(train_output.data, 1)  # 取出預測的 maximum
             # 獲取所有可能的類別
             class_names = torch.unique(torch.cat((predicted, label))).tolist()
-            # 初始化 TP、TN、FP、FN
-            TP = {c: 0 for c in class_names}
-            TN = {c: 0 for c in class_names}
-            FP = {c: 0 for c in class_names}
-            FN = {c: 0 for c in class_names}
-
-            for c in class_names:
-                TP[c] = ((predicted == c) & (label == c)).sum().item()
-                TN[c] = ((predicted != c) & (label != c)).sum().item()
-                FP[c] = ((predicted == c) & (label != c)).sum().item()
-                FN[c] = ((predicted != c) & (label == c)).sum().item()
-
-                correct_train += (TP[c] + TN[c])
-                total_train += (TP[c] + TN[c] + FP[c] + FN[c])
-            # total_train += label.size(0)
-            # correct_train += (predicted == label).sum()
+            
+            total_train += label.size(0)
+            correct_train += (predicted == label).sum().item()
             
             train_loss_C += train_loss.item()
             iter += 1
@@ -167,7 +160,7 @@ if __name__ == '__main__':
         print('Training epoch: %d / loss_C: %.3f | acc: %.3f' % \
               (epoch + 1, train_loss_C / iter, correct_train / total_train))
         
-        # --------------------------
+        # -------------------------- 
         # Testing Stage
         # --------------------------
         C.eval() # 設定 train 或 eval
@@ -179,61 +172,51 @@ if __name__ == '__main__':
                 
                 # 計算測試資料的準確度 (correct_test / total_test)
                 _, predicted = torch.max(test_output.data, 1)
-                # total_test += label.size(0)
-                # correct_test += (predicted == label).sum()
+                total_test += label.size(0)
+                correct_test += (predicted == label).sum().item()
                 
-                # 獲取所有可能的類別
-                class_names = torch.unique(torch.cat((predicted, label))).tolist()
+                # 收集預測和真實標籤用於計算指標
+                all_predictions.extend(predicted.cpu().numpy())
+                all_labels.extend(label.cpu().numpy())       
 
-                # 初始化 TP、TN、FP、FN
-                TP = {c: 0 for c in class_names}
-                TN = {c: 0 for c in class_names}
-                FP = {c: 0 for c in class_names}
-                FN = {c: 0 for c in class_names}
-
-                for c in class_names:
-                    TP[c] = ((predicted == c) & (label == c)).sum().item()
-                    TN[c] = ((predicted != c) & (label != c)).sum().item()
-                    FP[c] = ((predicted == c) & (label != c)).sum().item()
-                    FN[c] = ((predicted != c) & (label == c)).sum().item()
-
-                    true_positive += TP[c]
-                    true_negative += TN[c]
-                    false_positive += FP[c]
-                    false_negative += FN[c]
-
-                    correct_test += (TP[c] + TN[c])
-                    total_test += (TP[c] + TN[c] + FP[c] + FN[c])
-        
         print('Testing acc: %.3f' % (correct_test / total_test))
                                      
         train_acc.append(100 * (correct_train / total_train)) # training accuracy
         test_acc.append(100 * (correct_test / total_test))    # testing accuracy
         loss_epoch_C.append((train_loss_C / iter))            # loss 
-        
-        print('true_positive: %d | true_negative: %d | false_positive: %d | false_negative: %d' % \
-              (true_positive, true_negative, false_positive, false_negative))
-        if true_positive == 0:
-            recall = 0
-            precision = 0
-            f1 = 0
-        else:
-            recall = true_positive / (true_positive + false_negative)
-            precision = true_positive / (true_positive + false_positive)
-            f1 = 2 * (precision * recall) / (precision + recall)
-        print('Recall: %.3f | Precision: %.3f | F1: %.3f' % (recall, precision, f1))
-        recall_epoch.append(recall)
-        precision_epoch.append(precision)
-        f1_epoch.append(f1)
+
+        # 計算並輸出 precision, recall, f1 score
+        precision = precision_score(all_labels, all_predictions, average=None)
+        recall = recall_score(all_labels, all_predictions, average=None)
+        f1 = f1_score(all_labels, all_predictions, average=None)
+        for i, class_name in enumerate(class_names):
+            print(f"Class {class_name}: Precision: {precision[i]:.3f}, Recall: {recall[i]:.3f}, F1 Score: {f1[i]:.3f}")
+
+        print("Unique labels:", np.unique(all_labels))
+        print("Unique predictions:", np.unique(all_predictions))
 
         end_time = time.time()
         print('Cost %.3f(secs)' % (end_time - start_time))
 
+    # 繪製最後一個 epoch 的混淆矩陣
+    conf_matrix = confusion_matrix(all_labels, all_predictions)
+    plt.figure(figsize=(12, 10))
+    disp = ConfusionMatrixDisplay(confusion_matrix=conf_matrix)
+    disp.plot(cmap=plt.cm.Blues)
+    plt.title('Confusion Matrix')
+    
+    # 保存混淆矩陣圖
+    conf_matrix_pic_name = 'ResNet50_confusion_matrix_' + time.strftime("%Y%m%d", time.localtime()) + '.png'
+    plt.savefig(os.path.join(fig_dir, conf_matrix_pic_name))
+    plt.show()
+
 code_end_time = time.time()
-print('總花費時間： %.3f(secs)' % (code_end_time - code_start_time))
+total_time = code_end_time - code_start_time
+hours, remainder = divmod(total_time, 3600)
+minutes, seconds = divmod(remainder, 60)
+print('總花費時間： {:02}時{:02}分{:02}秒'.format(int(hours), int(minutes), int(seconds)))
 
 # 將每一個 epoch 的 Loss 以及 Training / Testing accuracy 紀錄下來並繪製成圖
-fig_dir = 'D:/實驗結果/'
 if not os.path.isdir(fig_dir):
     os.makedirs(fig_dir)
 
@@ -257,31 +240,4 @@ plt.title('Training acc')
 plt.ylabel('acc (%)'), plt.xlabel('epoch')
 plt.legend(['training acc', 'testing acc'], loc = 'upper left')
 plt.savefig(os.path.join(fig_dir, acc_pic_name))
-plt.show()
-
-recall_pic_name = 'ResNet50_recall_' + now + '.png'
-plt.figure()
-plt.plot(list(range(epochs)), recall_epoch)    # plot your recall
-plt.title('Training recall')
-plt.ylabel('recall'), plt.xlabel('epoch')
-plt.legend(['recall'], loc = 'upper left')
-plt.savefig(os.path.join(fig_dir, recall_pic_name))
-plt.show()
-
-precision_pic_name = 'ResNet50_precision_' + now + '.png'
-plt.figure()
-plt.plot(list(range(epochs)), precision_epoch)    # plot your precision
-plt.title('Training precision')
-plt.ylabel('precision'), plt.xlabel('epoch')
-plt.legend(['precision'], loc = 'upper left')
-plt.savefig(os.path.join(fig_dir, precision_pic_name))
-plt.show()
-
-f1_pic_name = 'ResNet50_f1_' + now + '.png'
-plt.figure()
-plt.plot(list(range(epochs)), f1_epoch)    # plot your f1
-plt.title('Training f1')
-plt.ylabel('f1'), plt.xlabel('epoch')
-plt.legend(['f1'], loc = 'upper left')
-plt.savefig(os.path.join(fig_dir, f1_pic_name))
 plt.show()
