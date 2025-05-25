@@ -13,6 +13,7 @@ from torchvision import models
 from torch import optim
 from torchsummary import summary
 from sklearn.metrics import recall_score, precision_score, f1_score, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.utils.class_weight import compute_class_weight
 
 import time
 
@@ -43,7 +44,7 @@ normalize = transforms.Normalize(mean = [0.485, 0.456, 0.406], std = [0.229, 0.2
 # Transformer
 train_transformer = transforms.Compose([
     transforms.Resize(256),
-    transforms.RandomResizedCrop(224),
+    # transforms.RandomResizedCrop(224),
     transforms.RandomHorizontalFlip(),
     transforms.ToTensor(),
     normalize
@@ -51,7 +52,7 @@ train_transformer = transforms.Compose([
  
 test_transformer = transforms.Compose([
     transforms.Resize(224),
-    transforms.CenterCrop(224),
+    #transforms.CenterCrop(224),
     transforms.ToTensor(),
     normalize
 ])
@@ -108,8 +109,11 @@ C = C.to(device)
 optimizer_C = optim.SGD(C.parameters(), lr = lr) # 選擇你想用的 optimizer
 summary(C, (3, 244, 244))                        # 利用 torchsummary 的 summary package 印出模型資訊，input size: (3 * 224 * 224)
 # 計算每個類別的權重
-class_counts = np.bincount([label for _, label in ImageFolder(data_dir).samples])
-class_weights = 1.0 / class_counts
+# class_counts = np.bincount([label for _, label in ImageFolder(data_dir).samples])
+# class_weights = 1.0 / class_counts
+# weights = torch.tensor(class_weights, dtype=torch.float).to(device)
+targets = [label for _, label in ImageFolder(data_dir).samples]
+class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(targets), y=targets)
 weights = torch.tensor(class_weights, dtype=torch.float).to(device)
 
 # Loss function with class weights
