@@ -21,6 +21,20 @@ import time
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(device)
 
+# 使用 Focal Loss 並加入 class weights
+# Define the FocalLoss class
+class FocalLoss(nn.Module):
+    def __init__(self, alpha, gamma=1.5):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def forward(self, inputs, targets):
+        ce_loss = nn.CrossEntropyLoss(weight=self.alpha)(inputs, targets)
+        pt = torch.exp(-ce_loss)
+        focal_loss = (1 - pt) ** self.gamma * ce_loss
+        return focal_loss
+
 # 實作一個可以讀取的Pytorch dataset
 class DogDataset(Dataset):
     
@@ -96,7 +110,7 @@ def split_Train_Val_Data(data_dir):
 # 參數設定
 batch_size = 64                                  # Batch Size
 lr = 1e-3                                        # Learning Rate
-epochs = 10                                      # epoch 次數
+epochs = 15                                      # epoch 次數
 
 data_dir = 'D:/資料集/root'                       # 資料夾名稱
 fig_dir = 'D:/實驗結果/'                          # 圖片儲存的資料夾名稱
@@ -109,15 +123,11 @@ C = C.to(device)
 optimizer_C = optim.SGD(C.parameters(), lr = lr) # 選擇你想用的 optimizer
 summary(C, (3, 244, 244))                        # 利用 torchsummary 的 summary package 印出模型資訊，input size: (3 * 224 * 224)
 # 計算每個類別的權重
-# class_counts = np.bincount([label for _, label in ImageFolder(data_dir).samples])
-# class_weights = 1.0 / class_counts
-# weights = torch.tensor(class_weights, dtype=torch.float).to(device)
 targets = [label for _, label in ImageFolder(data_dir).samples]
 class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(targets), y=targets)
 weights = torch.tensor(class_weights, dtype=torch.float).to(device)
 
-# Loss function with class weights
-criterion = nn.CrossEntropyLoss(weight=weights)  # 選擇想用的 loss function並加入 class weight
+criterion = FocalLoss(alpha=weights, gamma=2)  # gamma 可調整，默認為 2
 
 loss_epoch_C = []
 train_acc, test_acc = [], []

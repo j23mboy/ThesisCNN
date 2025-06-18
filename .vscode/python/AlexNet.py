@@ -14,6 +14,7 @@ from torch import optim
 from torchsummary import summary
 from sklearn.metrics import recall_score, precision_score, f1_score, confusion_matrix, ConfusionMatrixDisplay
 from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
+from sklearn.utils.class_weight import compute_class_weight
 
 import time
 
@@ -136,8 +137,11 @@ scheduler = ReduceLROnPlateau(optimizer_C, mode='min', factor=0.1, patience=5, t
 summary(C, (3, 244, 244))                        # 利用 torchsummary 的 summary package 印出模型資訊，input size: (3 * 224 * 224)
 # Loss function
 # 計算每個類別的權重
-class_counts = np.bincount([label for _, label in ImageFolder(data_dir).samples])
-class_weights = 1.0 / class_counts
+# class_counts = np.bincount([label for _, label in ImageFolder(data_dir).samples])
+# class_weights = 1.0 / class_counts
+# weights = torch.tensor(class_weights, dtype=torch.float).to(device)
+targets = [label for _, label in ImageFolder(data_dir).samples]
+class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(targets), y=targets)
 weights = torch.tensor(class_weights, dtype=torch.float).to(device)
 
 # Loss function with class weights
