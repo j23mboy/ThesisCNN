@@ -151,6 +151,11 @@ loss_epoch_C = []
 train_acc, test_acc = [], []
 best_acc, best_auc = 0.0, 0.0
 
+confidence_threshold = 0.85  # 設定 confidence threshold
+
+# 訓練完成後儲存模型的路徑
+model_save_path = 'D:/模型儲存/AlexNet_model.pth'
+
 if __name__ == '__main__': 
     code_start_time = time.time()   
     for epoch in range(epochs):
@@ -208,13 +213,18 @@ if __name__ == '__main__':
                 test_loss_C += test_loss.item()
                 
                 # 計算測試資料的準確度 (correct_test / total_test)
-                _, predicted = torch.max(test_output.data, 1)
-                total_test += label.size(0)
-                correct_test += (predicted == label).sum() 
+                probabilities = torch.softmax(test_output, dim=1)  # 計算每個類別的概率
+                confidence, predicted = torch.max(probabilities, 1)  # 取出預測的最大概率和類別
+                mask = confidence >= confidence_threshold  # 過濾低於閾值的預測
+                filtered_predictions = predicted[mask]
+                filtered_labels = label[mask]
+                
+                total_test += filtered_labels.size(0)
+                correct_test += (filtered_predictions == filtered_labels).sum()
                 
                 # 收集預測和真實標籤用於計算指標
-                all_predictions.extend(predicted.cpu().numpy())
-                all_labels.extend(label.cpu().numpy())     
+                all_predictions.extend(filtered_predictions.cpu().numpy())
+                all_labels.extend(filtered_labels.cpu().numpy())     
         
         print('Testing acc: %.3f' % (correct_test / total_test))
                                      
@@ -285,3 +295,7 @@ plt.ylabel('acc (%)'), plt.xlabel('epoch')
 plt.legend(['training acc', 'testing acc'], loc='upper left')
 plt.savefig(os.path.join(fig_dir, acc_pic_name))
 plt.show()
+
+# 儲存訓練完成的模型
+torch.save(C.state_dict(), model_save_path)
+print(f"模型已儲存至 {model_save_path}")

@@ -133,6 +133,9 @@ loss_epoch_C = []
 train_acc, test_acc = [], []
 best_acc, best_auc = 0.0, 0.0
 
+# 訓練完成後儲存模型的路徑
+model_save_path = 'D:/模型儲存/ResNer50_model.pth'
+
 if __name__ == '__main__':
     code_start_time = time.time()    
     for epoch in range(epochs):
@@ -255,3 +258,7 @@ plt.ylabel('acc (%)'), plt.xlabel('epoch')
 plt.legend(['training acc', 'testing acc'], loc = 'upper left')
 plt.savefig(os.path.join(fig_dir, acc_pic_name))
 plt.show()
+
+# 儲存訓練完成的模型
+torch.save(C.state_dict(), model_save_path)
+print(f"模型已儲存至 {model_save_path}")
