@@ -13,28 +13,13 @@ from torchvision import models
 from torch import optim
 from torchsummary import summary
 from sklearn.metrics import recall_score, precision_score, f1_score, confusion_matrix, ConfusionMatrixDisplay
-from sklearn.utils.class_weight import compute_class_weight
-from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 import time
 
 # 確認一下使用 cuda 或是 cpu
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(device)
-
-# 使用 Focal Loss 並加入 class weights
-# Define the FocalLoss class
-class FocalLoss(nn.Module):
-    def __init__(self, alpha, gamma=1.5):
-        super(FocalLoss, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-
-    def forward(self, inputs, targets):
-        ce_loss = nn.CrossEntropyLoss(weight=self.alpha)(inputs, targets)
-        pt = torch.exp(-ce_loss)
-        focal_loss = (1 - pt) ** self.gamma * ce_loss
-        return focal_loss
 
 # 實作一個可以讀取的Pytorch dataset
 class DogDataset(Dataset):
@@ -59,7 +44,7 @@ normalize = transforms.Normalize(mean = [0.485, 0.456, 0.406], std = [0.229, 0.2
 # Transformer
 train_transformer = transforms.Compose([
     transforms.Resize(256),
-    # transforms.RandomResizedCrop(224),
+    transforms.RandomResizedCrop(224),
     transforms.RandomHorizontalFlip(),
     transforms.ToTensor(),
     normalize
@@ -67,7 +52,7 @@ train_transformer = transforms.Compose([
  
 test_transformer = transforms.Compose([
     transforms.Resize(224),
-    #transforms.CenterCrop(224),
+    transforms.CenterCrop(224),
     transforms.ToTensor(),
     normalize
 ])
@@ -111,35 +96,78 @@ def split_Train_Val_Data(data_dir):
 # 參數設定
 batch_size = 64                                  # Batch Size
 lr = 1e-3                                        # Learning Rate
-epochs = 15                                      # epoch 次數
+epochs = 25                                      # epoch 次數
 
 data_dir = 'D:/資料集/root'                       # 資料夾名稱
 fig_dir = 'D:/實驗結果/'                          # 圖片儲存的資料夾名稱
 
 train_dataloader, test_dataloader = split_Train_Val_Data(data_dir)
-C = models.resnet50(pretrained=True)
+C = models.resnet34(pretrained=True)
 num_features = C.fc.in_features
 C.fc = nn.Linear(num_features, 4)  # 將輸出調整為 4 個類別
 C = C.to(device)
 optimizer_C = optim.SGD(C.parameters(), lr = lr) # 選擇你想用的 optimizer
-
-# 定義 ReduceLROnPlateau 學習率調整器
-scheduler = ReduceLROnPlateau(optimizer_C, mode='min', factor=0.1, patience=3, threshold=0.005, verbose=True)
-
-summary(C, (3, 244, 244)) # 利用 torchsummary 的 summary package 印出模型資訊，input size: (3 * 224 * 224)
+summary(C, (3, 244, 244))                        # 利用 torchsummary 的 summary package 印出模型資訊，input size: (3 * 224 * 224)
 # 計算每個類別的權重
-targets = [label for _, label in ImageFolder(data_dir).samples]
-class_weights = compute_class_weight(class_weight='balanced', classes=np.unique(targets), y=targets)
+class_counts = np.bincount([label for _, label in ImageFolder(data_dir).samples])
+class_weights = 1.0 / class_counts
 weights = torch.tensor(class_weights, dtype=torch.float).to(device)
 
-criterion = FocalLoss(alpha=weights, gamma=2)  # gamma 可調整，默認為 2
+# Loss function with class weights
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=1, gamma=1.25, reduction='mean'):  # 更新 gamma 值為 1.5
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        ce_loss = nn.CrossEntropyLoss(reduction='none')(inputs, targets)
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
+# 使用 Focal Loss 替代 Label Smoothing
+criterion = FocalLoss(alpha=1, gamma=1.25, reduction='mean')
 
 loss_epoch_C = []
 train_acc, test_acc = [], []
 best_acc, best_auc = 0.0, 0.0
 
+scheduler = ReduceLROnPlateau(optimizer_C, mode='min', factor=0.1, patience=3, threshold=0.001, verbose=True)
+
+# Early Stopping 機制
+class EarlyStopping:
+    def __init__(self, patience=5, verbose=False):
+        self.patience = patience
+        self.verbose = verbose
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+
+    def __call__(self, val_loss):
+        score = -val_loss
+        if self.best_score is None:
+            self.best_score = score
+        elif score < self.best_score:
+            self.counter += 1
+            if self.verbose:
+                print(f"EarlyStopping counter: {self.counter} out of {self.patience}")
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.counter = 0
+
+early_stopping = EarlyStopping(patience=5, verbose=True)
+
 # 訓練完成後儲存模型的路徑
-model_save_path = 'D:/模型儲存/ResNer50_model.pth'
+model_save_path = 'D:/模型儲存/ResNet34_model.pth'
 
 if __name__ == '__main__':
     code_start_time = time.time()    
@@ -186,13 +214,11 @@ if __name__ == '__main__':
         # Testing Stage
         # --------------------------
         C.eval() # 設定 train 或 eval
-        test_loss_C = 0.0  # 初始化測試損失
-        for i, (x, label) in enumerate(test_dataloader):
-            with torch.no_grad():
+        for i, (x, label) in enumerate(test_dataloader) :
+            with torch.no_grad():                           # 測試階段不需要求梯度
                 x, label = x.to(device), label.to(device)
-                test_output = C(x)
-                test_loss = criterion(test_output, label)
-                test_loss_C += test_loss.item()
+                test_output = C(x)                          # 將測試資料輸入至模型進行測試
+                test_loss = criterion(test_output, label)   # 計算 loss
                 
                 # 計算測試資料的準確度 (correct_test / total_test)
                 _, predicted = torch.max(test_output.data, 1)
@@ -203,10 +229,16 @@ if __name__ == '__main__':
                 all_predictions.extend(predicted.cpu().numpy())
                 all_labels.extend(label.cpu().numpy())       
 
-        # 更新學習率
-        scheduler.step(test_loss_C / len(test_dataloader))
-
         print('Testing acc: %.3f' % (correct_test / total_test))
+        
+        # 更新學習率
+        scheduler.step(train_loss_C / iter)
+        
+        # Early Stopping 判斷
+        early_stopping(train_loss_C / iter)
+        if early_stopping.early_stop:
+            print("Early stopping triggered.")
+            break
                                      
         train_acc.append(100 * (correct_train / total_train)) # training accuracy
         test_acc.append(100 * (correct_test / total_test))    # testing accuracy
@@ -233,7 +265,7 @@ if __name__ == '__main__':
     plt.title('Confusion Matrix')
     
     # 保存混淆矩陣圖
-    conf_matrix_pic_name = 'ResNet50_confusion_matrix_' + time.strftime("%Y%m%d", time.localtime()) + '.png'
+    conf_matrix_pic_name = 'ResNet34_confusion_matrix_' + time.strftime("%Y%m%d", time.localtime()) + '.png'
     plt.savefig(os.path.join(fig_dir, conf_matrix_pic_name))
     plt.show()
 
@@ -250,7 +282,7 @@ if not os.path.isdir(fig_dir):
 # 取得現在時間，格式為yyyyMMdd
 now = time.strftime("%Y%m%d", time.localtime())
 
-loss_pic_name = 'ResNet50_loss_' + now + '.png'
+loss_pic_name = 'ResNet34_loss_' + now + '.png'
 plt.figure()
 plt.plot(list(range(epochs)), loss_epoch_C) # plot your loss
 plt.title('Training Loss')
@@ -259,7 +291,7 @@ plt.legend(['loss_C'], loc = 'upper left')
 plt.savefig(os.path.join(fig_dir, loss_pic_name))
 plt.show()
 
-acc_pic_name = 'ResNet50_acc_' + now + '.png'
+acc_pic_name = 'ResNet34_acc_' + now + '.png'
 plt.figure()
 plt.plot(list(range(epochs)), train_acc)    # plot your training accuracy
 plt.plot(list(range(epochs)), test_acc)     # plot your testing accuracy
@@ -270,5 +302,5 @@ plt.savefig(os.path.join(fig_dir, acc_pic_name))
 plt.show()
 
 # 儲存訓練完成的模型
-# torch.save(C.state_dict(), model_save_path)
-# print(f"模型已儲存至 {model_save_path}")
+torch.save(C.state_dict(), model_save_path)
+print(f"模型已儲存至 {model_save_path}")
