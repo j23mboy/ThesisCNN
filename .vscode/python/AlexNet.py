@@ -4,6 +4,9 @@ import numpy as np
 import torch.nn as nn
 import matplotlib.pyplot as plt
 from PIL import Image
+import csv
+import pandas as pd
+from pathlib import Path
 
 import torchvision.transforms as transforms
 import torchvision.models as models
@@ -45,15 +48,15 @@ normalize = transforms.Normalize(mean = [0.485, 0.456, 0.406], std = [0.229, 0.2
 # Transformer
 train_transformer = transforms.Compose([
     transforms.Resize(256),
-    # transforms.RandomResizedCrop(224),
-    transforms.RandomHorizontalFlip(),
+    transforms.RandomResizedCrop(224),
+    # transforms.RandomHorizontalFlip(),
     transforms.ToTensor(),
     normalize
 ])
  
 test_transformer = transforms.Compose([
     transforms.Resize(224),
-    # transforms.CenterCrop(224),
+    transforms.CenterCrop(224),
     transforms.ToTensor(),
     normalize
 ])
@@ -120,6 +123,10 @@ epochs = 10                                      # epoch 次數
 
 data_dir = 'D:/資料集/root'                       # 資料夾名稱
 fig_dir = 'D:/實驗結果/'                          # 圖片儲存的資料夾名稱
+risk_coverage_dir = 'D:/實驗結果/Risk–Coverage/'    # softmax 分數與標籤儲存的資料夾名稱
+
+# 確保 Risk-Coverage 目錄存在
+Path(risk_coverage_dir).mkdir(parents=True, exist_ok=True)
 
 train_dataloader, test_dataloader = split_Train_Val_Data(data_dir)
 C = models.alexnet(pretrained=True)
@@ -205,6 +212,11 @@ if __name__ == '__main__':
         # --------------------------
         C.eval() # 設定 train 或 eval
         test_loss_C = 0.0
+        
+        # 建立列表來儲存所有測試資料的 softmax 分數與標籤
+        all_softmax_scores = []
+        all_true_labels = []
+        
         for i, (x, label) in enumerate(test_dataloader):
             with torch.no_grad():
                 x, label = x.to(device), label.to(device)  # 確保資料移動到與模型相同的設備
@@ -215,6 +227,12 @@ if __name__ == '__main__':
                 # 計算測試資料的準確度 (correct_test / total_test)
                 probabilities = torch.softmax(test_output, dim=1)  # 計算每個類別的概率
                 confidence, predicted = torch.max(probabilities, 1)  # 取出預測的最大概率和類別
+                
+                # 收集每筆資料的 softmax 分數與標籤
+                for j in range(len(label)):
+                    all_softmax_scores.append(probabilities[j].cpu().numpy())
+                    all_true_labels.append(label[j].item())
+                
                 mask = confidence >= confidence_threshold  # 過濾低於閾值的預測
                 filtered_predictions = predicted[mask]
                 filtered_labels = label[mask]
@@ -224,7 +242,21 @@ if __name__ == '__main__':
                 
                 # 收集預測和真實標籤用於計算指標
                 all_predictions.extend(filtered_predictions.cpu().numpy())
-                all_labels.extend(filtered_labels.cpu().numpy())     
+                all_labels.extend(filtered_labels.cpu().numpy())
+        
+        # 在最後一個 epoch 儲存 softmax 分數與標籤
+        if epoch == epochs - 1:
+            # 創建包含 softmax 分數和標籤的 DataFrame
+            softmax_df = pd.DataFrame(all_softmax_scores)
+            softmax_df.columns = [f'class_{i}' for i in range(softmax_df.shape[1])]
+            softmax_df['true_label'] = all_true_labels
+            
+            # 生成檔案名稱，包含當前日期
+            csv_filename = os.path.join(risk_coverage_dir, f'alexnet_softmax_scores_{time.strftime("%Y%m%d", time.localtime())}.csv')
+            
+            # 儲存為 CSV 檔案
+            softmax_df.to_csv(csv_filename, index=False)
+            print(f"已將 softmax 分數與標籤儲存至 {csv_filename}")
         
         print('Testing acc: %.3f' % (correct_test / total_test))
                                      

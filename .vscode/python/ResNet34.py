@@ -4,6 +4,8 @@ import numpy as np
 import torch.nn as nn
 import matplotlib.pyplot as plt
 from PIL import Image
+import cv2
+import shutil
 
 import torchvision.transforms as transforms
 import torchvision.models as models
@@ -70,7 +72,7 @@ def split_Train_Val_Data(data_dir):
     train_labels, test_labels = [], []
     
     for i, data in enumerate(character): # 讀取每個類別中所有的檔名 (i: label, data: filename)
-        np.random.seed(42)
+        # np.random.seed(42)
         np.random.shuffle(data)
             
         # -------------------------------------------
@@ -94,9 +96,9 @@ def split_Train_Val_Data(data_dir):
     return train_dataloader, test_dataloader
 
 # 參數設定
-batch_size = 64                                  # Batch Size
+batch_size = 32                                  # Batch Size
 lr = 1e-3                                        # Learning Rate
-epochs = 25                                      # epoch 次數
+epochs = 20                                      # epoch 次數
 
 data_dir = 'D:/資料集/root'                       # 資料夾名稱
 fig_dir = 'D:/實驗結果/'                          # 圖片儲存的資料夾名稱
@@ -170,7 +172,14 @@ early_stopping = EarlyStopping(patience=5, verbose=True)
 model_save_path = 'D:/模型儲存/ResNet34_model.pth'
 
 if __name__ == '__main__':
-    code_start_time = time.time()    
+    code_start_time = time.time()
+    # 儲存一個真正的副本，而不是參考
+    import copy
+    original_test_dataloader = copy.deepcopy(test_dataloader)
+    
+    # 獲取所有類別名稱
+    class_names = ImageFolder(data_dir).classes
+    
     for epoch in range(epochs):
         start_time = time.time()
         iter = 0
@@ -181,6 +190,8 @@ if __name__ == '__main__':
         # 初始化預測和真實標籤的列表
         all_predictions = []
         all_labels = []
+        # 用於保存錯誤樣本的列表
+        misclassified_samples = []
 
         C.train() # 設定 train 或 eval
         print('epoch: ' + str(epoch + 1) + ' / ' + str(epochs))  
@@ -227,7 +238,19 @@ if __name__ == '__main__':
                 
                 # 收集預測和真實標籤用於計算指標
                 all_predictions.extend(predicted.cpu().numpy())
-                all_labels.extend(label.cpu().numpy())       
+                all_labels.extend(label.cpu().numpy())
+                
+                # 收集錯誤分類的樣本
+                if epoch == epochs - 1 or early_stopping.counter >= early_stopping.patience - 1:  # 只在最後一個epoch收集
+                    misclassified_indices = (predicted != label).nonzero(as_tuple=True)[0]
+                    for idx in misclassified_indices:
+                        # 收集原始文件路徑、真實標籤和預測標籤
+                        orig_idx = i * batch_size + idx.item()
+                        if orig_idx < len(test_dataloader.dataset.filenames):
+                            file_path = test_dataloader.dataset.filenames[orig_idx]
+                            true_label = label[idx].item()
+                            pred_label = predicted[idx].item()
+                            misclassified_samples.append((file_path, true_label, pred_label))
 
         print('Testing acc: %.3f' % (correct_test / total_test))
         
@@ -257,6 +280,42 @@ if __name__ == '__main__':
         end_time = time.time()
         print('Cost %.3f(secs)' % (end_time - start_time))
 
+    # 函數用於導出錯誤分類的樣本
+    def export_misclassified_samples(misclassified_samples, class_names):
+        now = time.strftime("%Y%m%d", time.localtime())
+        misclassified_dir = os.path.join(fig_dir, f'錯判樣本_ResNet34_{now}')
+        
+        if not os.path.exists(misclassified_dir):
+            os.makedirs(misclassified_dir)
+            
+        print(f"正在導出 {len(misclassified_samples)} 個錯誤分類樣本到 {misclassified_dir}...")
+        
+        # 為每個類別創建子目錄
+        for class_idx, class_name in enumerate(class_names):
+            class_dir = os.path.join(misclassified_dir, f"{class_idx}_{class_name}")
+            if not os.path.exists(class_dir):
+                os.makedirs(class_dir)
+        
+        for idx, (file_path, true_label, pred_label) in enumerate(misclassified_samples):
+            # 獲取原始檔案名
+            orig_filename = os.path.basename(file_path)
+            
+            # 創建新的檔案名，包含真實標籤和預測標籤
+            new_filename = f"true_{class_names[true_label]}_pred_{class_names[pred_label]}_{orig_filename}"
+            
+            # 存放到真實標籤的目錄下
+            target_dir = os.path.join(misclassified_dir, f"{true_label}_{class_names[true_label]}")
+            target_path = os.path.join(target_dir, new_filename)
+            
+            # 複製檔案
+            shutil.copy2(file_path, target_path)
+        
+        print(f"錯誤分類樣本導出完成！共 {len(misclassified_samples)} 個樣本")
+    
+    # 導出最後一個 epoch 的錯誤分類樣本
+    if misclassified_samples:
+        export_misclassified_samples(misclassified_samples, class_names)
+    
     # 繪製最後一個 epoch 的混淆矩陣
     conf_matrix = confusion_matrix(all_labels, all_predictions)
     plt.figure(figsize=(12, 10))
@@ -302,5 +361,5 @@ plt.savefig(os.path.join(fig_dir, acc_pic_name))
 plt.show()
 
 # 儲存訓練完成的模型
-torch.save(C.state_dict(), model_save_path)
-print(f"模型已儲存至 {model_save_path}")
+# torch.save(C.state_dict(), model_save_path)
+# print(f"模型已儲存至 {model_save_path}")
