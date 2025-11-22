@@ -329,5 +329,5 @@ plt.savefig(os.path.join(fig_dir, acc_pic_name))
 plt.show()
 
 # 儲存訓練完成的模型
-torch.save(C.state_dict(), model_save_path)
-print(f"模型已儲存至 {model_save_path}")
+# torch.save(C.state_dict(), model_save_path)
+# print(f"模型已儲存至 {model_save_path}")

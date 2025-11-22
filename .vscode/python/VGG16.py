@@ -43,8 +43,8 @@ normalize = transforms.Normalize(mean = [0.485, 0.456, 0.406], std = [0.229, 0.2
 # Transformer
 train_transformer = transforms.Compose([
     transforms.Resize(256),
-    transforms.RandomResizedCrop(224),
-    # transforms.RandomHorizontalFlip(),
+    transforms.RandomResizedCrop(256),
+    transforms.RandomHorizontalFlip(),
     transforms.ToTensor(),
     normalize
 ])

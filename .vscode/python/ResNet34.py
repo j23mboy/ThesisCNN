@@ -46,7 +46,7 @@ normalize = transforms.Normalize(mean = [0.485, 0.456, 0.406], std = [0.229, 0.2
 # Transformer
 train_transformer = transforms.Compose([
     transforms.Resize(256),
-    transforms.RandomResizedCrop(224),
+    transforms.RandomResizedCrop(256),
     transforms.RandomHorizontalFlip(),
     transforms.ToTensor(),
     normalize
@@ -361,5 +361,5 @@ plt.savefig(os.path.join(fig_dir, acc_pic_name))
 plt.show()
 
 # 儲存訓練完成的模型
-# torch.save(C.state_dict(), model_save_path)
-# print(f"模型已儲存至 {model_save_path}")
+torch.save(C.state_dict(), model_save_path)
+print(f"模型已儲存至 {model_save_path}")
